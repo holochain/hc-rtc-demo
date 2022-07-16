@@ -39,7 +39,7 @@ impl Config {
         Ok(Arc::new(Self {
             friendly_name: "Holochain<3".into(),
             shoutout: "Holochain rocks!".into(),
-            signal: vec![url::Url::parse("hc-rtc-sig:cp_XH80mDOhz8WviJx6btbzCTwYDqDZTre2ff-jYnsU/127.0.0.1:34583/[::1]:43325").unwrap()],
+            signal: vec![url::Url::parse("hc-rtc-sig:z9_7dB5HPV8tK6y8Q86yBtO-99Aa2QFZOZxfy0w0lDo/127.0.0.1:43489/[::1]:38559").unwrap()],
             lair_tag,
             lair_passphrase,
             lair_config: Arc::new(lair_config),

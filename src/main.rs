@@ -14,6 +14,8 @@ mod config;
 
 mod lair;
 
+mod core;
+
 mod sig;
 
 #[tokio::main(flavor = "multi_thread")]
@@ -41,9 +43,19 @@ async fn main_err() -> Result<()> {
 
     let lair = lair::load(config.clone()).await?;
 
-    let _sig = sig::load(config.clone(), lair).await?;
+    let core = core::Core::new();
 
-    tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+    sig::load(config.clone(), lair, core).await?;
 
-    Ok(())
+    struct Pend;
+
+    impl std::future::Future for Pend {
+        type Output = ();
+
+        fn poll(self: std::pin::Pin<&mut Self>, _: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+            std::task::Poll::Pending
+        }
+    }
+
+    Ok(Pend.await)
 }
