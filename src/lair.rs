@@ -14,13 +14,15 @@ pub async fn load(config: Arc<config::Config>) -> Result<Lair> {
 
     let passphrase = sodoken::BufRead::new_no_lock(config.lair_passphrase.as_bytes());
 
-    let keystore = PwHashLimits::Interactive.with_exec(|| {
-        lair_keystore_api::in_proc_keystore::InProcKeystore::new(
-            config.lair_config.clone(),
-            store_factory,
-            passphrase,
-        )
-    }).await?;
+    let keystore = PwHashLimits::Interactive
+        .with_exec(|| {
+            lair_keystore_api::in_proc_keystore::InProcKeystore::new(
+                config.lair_config.clone(),
+                store_factory,
+                passphrase,
+            )
+        })
+        .await?;
 
     let lair_client = keystore.new_client().await?;
 

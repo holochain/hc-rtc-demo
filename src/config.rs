@@ -1,7 +1,7 @@
 use crate::*;
 use lair_keystore_api::prelude::*;
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Config {
     pub friendly_name: String,
@@ -12,8 +12,25 @@ pub struct Config {
     pub lair_config: Arc<LairServerConfigInner>,
 }
 
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            serde_json::json!({
+                "friendlyName": &self.friendly_name,
+                "shoutout": &self.shoutout,
+                "signal": &self.signal,
+                "lairTag": &self.lair_tag,
+                "lairPassphrase": "<REDACTED>",
+                "lairConfig": &self.lair_config,
+            })
+        )
+    }
+}
+
 impl Config {
-    async fn new() -> Result<Arc<Self>> {
+    async fn new(data_root: &std::path::Path) -> Result<Arc<Self>> {
         tracing::info!("Generating config...");
 
         let mut rng = rand::thread_rng();
@@ -21,25 +38,16 @@ impl Config {
         let lair_tag: Arc<str> = rand_utf8::rand_utf8(&mut rng, 32).into();
         let lair_passphrase: Arc<str> = rand_utf8::rand_utf8(&mut rng, 32).into();
 
-        let mut data_root = dirs::data_local_dir().unwrap_or_else(|| {
-            let mut config = std::path::PathBuf::new();
-            config.push(".");
-            config
-        });
-        data_root.push("hc-rtc-demo");
-
-        tokio::fs::create_dir_all(&data_root).await?;
-
         let passphrase = sodoken::BufRead::new_no_lock(lair_passphrase.as_bytes());
 
-        let lair_config = PwHashLimits::Interactive.with_exec(|| {
-            LairServerConfigInner::new(data_root, passphrase)
-        }).await?;
+        let lair_config = PwHashLimits::Interactive
+            .with_exec(|| LairServerConfigInner::new(data_root, passphrase))
+            .await?;
 
         Ok(Arc::new(Self {
             friendly_name: "Holochain<3".into(),
             shoutout: "Holochain rocks!".into(),
-            signal: vec![url::Url::parse("hc-rtc-sig:z9_7dB5HPV8tK6y8Q86yBtO-99Aa2QFZOZxfy0w0lDo/127.0.0.1:43489/[::1]:38559").unwrap()],
+            signal: vec![url::Url::parse("hc-rtc-sig:z9_7dB5HPV8tK6y8Q86yBtO-99Aa2QFZOZxfy0w0lDo/127.0.0.1:44979/[::1]:46443").unwrap()],
             lair_tag,
             lair_passphrase,
             lair_config: Arc::new(lair_config),
@@ -62,17 +70,18 @@ pub async fn load_config() -> Result<Arc<Config>> {
 }
 
 async fn load_config_inner() -> Result<Arc<Config>> {
-    let mut config_fn = dirs::config_dir().unwrap_or_else(|| {
-        let mut config = std::path::PathBuf::new();
-        config.push(".");
-        config
-    });
-    config_fn.push("hc-rtc-demo.json");
+    let mut config_dir = std::path::PathBuf::new();
+    config_dir.push(".");
+    let suffix = std::env::var("HC_RTC_DEMO_CONFIG").unwrap_or_else(|_| "default".to_string());
+    config_dir.push(format!("hc-rtc-demo-config-{}", suffix));
+    tokio::fs::create_dir_all(&config_dir).await?;
+    let mut config_fn = config_dir.clone();
+    config_fn.push("config.json");
     match read_config(&config_fn).await {
         Ok(r) => Ok(r),
         Err(_) => {
             let _ = tokio::fs::remove_file(&config_fn).await;
-            run_init(&config_fn).await?;
+            run_init(&config_fn, &config_dir).await?;
             read_config(&config_fn).await
         }
     }
@@ -146,7 +155,7 @@ async fn read_config(config_fn: &std::path::Path) -> Result<Arc<Config>> {
     Ok(Arc::new(config))
 }
 
-async fn run_init(config_fn: &std::path::Path) -> Result<()> {
+async fn run_init(config_fn: &std::path::Path, config_dir: &std::path::Path) -> Result<()> {
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     use tokio::io::AsyncWriteExt;
@@ -164,7 +173,7 @@ async fn run_init(config_fn: &std::path::Path) -> Result<()> {
         Ok(file) => file,
     };
 
-    let config = Config::new().await?;
+    let config = Config::new(config_dir).await?;
     let mut config = serde_json::to_string_pretty(&config).unwrap();
     config.push('\n');
 

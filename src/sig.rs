@@ -16,11 +16,7 @@ impl Drop for Sig {
     }
 }
 
-pub async fn load(
-    config: Arc<config::Config>,
-    lair: lair::Lair,
-    core: core::Core,
-) -> Result<()> {
+pub async fn load(config: Arc<config::Config>, lair: lair::Lair, core: core::Core) -> Result<()> {
     let (cmd_send, cmd_recv) = tokio::sync::mpsc::unbounded_channel();
 
     core.sig(Sig {
@@ -43,9 +39,7 @@ async fn sig_task(
         loop {
             use rand::Rng;
             let secs = rand::thread_rng().gen_range(30..60);
-            tokio::time::sleep(
-                std::time::Duration::from_secs(secs),
-            ).await;
+            tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
             if cmd_send.send(SigCmd::Demo).is_err() {
                 break;
             }
@@ -79,9 +73,12 @@ async fn sig_task(
 
         tracing::info!(%signal_url, "Connecting to signal server...");
 
-        let recv_cb = Box::new(|msg| {
-            tracing::error!(?msg);
-        });
+        let recv_cb = {
+            let core = core.clone();
+            Box::new(move |msg| {
+                core.sig_msg(msg);
+            })
+        };
 
         let mut sig_cli = match hc_rtc_sig::cli::Cli::builder()
             .with_recv_cb(recv_cb)
@@ -115,6 +112,7 @@ async fn sig_task(
         }
 
         tracing::info!(%signal_addr);
+        core.addr(signal_addr);
 
         while let Some(cmd) = cmd_recv.recv().await {
             match cmd {

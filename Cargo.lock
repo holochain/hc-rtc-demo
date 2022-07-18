@@ -579,11 +579,11 @@ dependencies = [
 name = "hc-rtc-demo"
 version = "0.0.1"
 dependencies = [
- "dirs",
  "go-pion-webrtc",
  "hc-rtc-sig",
  "lair_keystore",
  "lair_keystore_api",
+ "parking_lot 0.12.1",
  "rand",
  "rand-utf8",
  "serde",
