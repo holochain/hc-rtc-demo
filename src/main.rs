@@ -47,9 +47,12 @@ async fn main_err() -> Result<()> {
 
     let lair = lair::load(config.clone()).await?;
 
-    let core = core::Core::new();
+    let core = core::Core::new(
+        config.friendly_name.clone(),
+        config.shoutout.clone(),
+    );
 
-    sig::load(config.clone(), lair, core).await?;
+    sig::Sig::spawn_to_core(config.clone(), lair, core).await?;
 
     struct Pend;
 

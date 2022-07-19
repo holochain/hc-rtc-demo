@@ -8,6 +8,9 @@ pub struct Sig {
 enum SigCmd {
     Shutdown,
     Demo,
+    SendOffer(state::PeerId, String),
+    SendAnswer(state::PeerId, String),
+    SendICE(state::PeerId, String),
 }
 
 impl Drop for Sig {
@@ -16,16 +19,46 @@ impl Drop for Sig {
     }
 }
 
-pub async fn load(config: Arc<config::Config>, lair: lair::Lair, core: core::Core) -> Result<()> {
-    let (cmd_send, cmd_recv) = tokio::sync::mpsc::unbounded_channel();
+impl Sig {
+    pub async fn spawn_to_core(
+        config: Arc<config::Config>,
+        lair: lair::Lair,
+        core: core::Core,
+    ) -> Result<()> {
+        let (cmd_send, cmd_recv) = tokio::sync::mpsc::unbounded_channel();
 
-    core.sig(Sig {
-        cmd_send: cmd_send.clone(),
-    });
+        core.sig(Sig {
+            cmd_send: cmd_send.clone(),
+        });
 
-    tokio::task::spawn(sig_task(core, config, lair, cmd_send, cmd_recv));
+        tokio::task::spawn(sig_task(core, config, lair, cmd_send, cmd_recv));
 
-    Ok(())
+        Ok(())
+    }
+
+    pub fn send_offer(
+        &self,
+        id: state::PeerId,
+        offer: String,
+    ) {
+        let _ = self.cmd_send.send(SigCmd::SendOffer(id, offer));
+    }
+
+    pub fn send_answer(
+        &self,
+        id: state::PeerId,
+        answer: String,
+    ) {
+        let _ = self.cmd_send.send(SigCmd::SendAnswer(id, answer));
+    }
+
+    pub fn send_ice(
+        &self,
+        id: state::PeerId,
+        ice: String,
+    ) {
+        let _ = self.cmd_send.send(SigCmd::SendICE(id, ice));
+    }
 }
 
 async fn sig_task(
@@ -119,6 +152,60 @@ async fn sig_task(
                 SigCmd::Shutdown => break,
                 SigCmd::Demo => {
                     if let Err(err) = sig_cli.demo().await {
+                        tracing::warn!(?err);
+                        continue 'sig_top;
+                    }
+                }
+                SigCmd::SendOffer(id, offer) => {
+                    let offer: serde_json::Value = match serde_json::from_str(&offer) {
+                        Err(err) => {
+                            tracing::warn!(?err);
+                            continue; // just the local loop
+                        }
+                        Ok(offer) => offer,
+                    };
+
+                    if let Err(err) = sig_cli.offer(
+                        &id.rem_id,
+                        &id.rem_pk,
+                        &offer,
+                    ).await {
+                        tracing::warn!(?err);
+                        continue 'sig_top;
+                    }
+                }
+                SigCmd::SendAnswer(id, answer) => {
+                    let answer: serde_json::Value = match serde_json::from_str(&answer) {
+                        Err(err) => {
+                            tracing::warn!(?err);
+                            continue; // just the local loop
+                        }
+                        Ok(answer) => answer,
+                    };
+
+                    if let Err(err) = sig_cli.answer(
+                        &id.rem_id,
+                        &id.rem_pk,
+                        &answer,
+                    ).await {
+                        tracing::warn!(?err);
+                        continue 'sig_top;
+                    }
+                }
+                SigCmd::SendICE(id, ice) => {
+                    let ice: serde_json::Value = match serde_json::from_str(&ice) {
+                        Err(err) => {
+                            tracing::warn!(?err);
+                            continue; // just the local loop
+                        }
+                        Ok(ice) => ice,
+                    };
+
+                    if let Err(err) = sig_cli.ice(
+                        &id.rem_id,
+                        &id.rem_pk,
+                        &ice,
+                    ).await {
                         tracing::warn!(?err);
                         continue 'sig_top;
                     }

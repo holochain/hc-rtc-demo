@@ -24,12 +24,15 @@ impl Drop for Core {
 }
 
 impl Core {
-    pub fn new() -> Self {
+    pub fn new(
+        friendly_name: String,
+        shoutout: String,
+    ) -> Self {
         let (core_send, core_recv) = tokio::sync::mpsc::unbounded_channel();
 
         let main_core = Self { is_main: true, core_send: core_send.clone() };
 
-        tokio::task::spawn(core_task(main_core.clone(), core_send, core_recv));
+        tokio::task::spawn(core_task(friendly_name, shoutout, main_core.clone(), core_send, core_recv));
 
         main_core
     }
@@ -50,8 +53,20 @@ impl Core {
         let _ = self.core_send.send(CoreCmd::SigMsg(msg));
     }
 
-    pub fn drop_con(&self, id: state::PeerId) {
-        let _ = self.core_send.send(CoreCmd::DropCon(id));
+    pub fn drop_con(&self, id: state::PeerId, should_block: bool) {
+        let _ = self.core_send.send(CoreCmd::DropCon(id, should_block));
+    }
+
+    pub fn send_offer(&self, id: state::PeerId, offer: String) {
+        let _ = self.core_send.send(CoreCmd::SendOffer(id, offer));
+    }
+
+    pub fn send_answer(&self, id: state::PeerId, answer: String) {
+        let _ = self.core_send.send(CoreCmd::SendAnswer(id, answer));
+    }
+
+    pub fn send_ice(&self, id: state::PeerId, ice: String) {
+        let _ = self.core_send.send(CoreCmd::SendICE(id, ice));
     }
 }
 
@@ -62,7 +77,10 @@ enum CoreCmd {
     ICE(serde_json::Value),
     Sig(sig::Sig),
     SigMsg(hc_rtc_sig::cli::SigMessage),
-    DropCon(state::PeerId),
+    DropCon(state::PeerId, bool),
+    SendOffer(state::PeerId, String),
+    SendAnswer(state::PeerId, String),
+    SendICE(state::PeerId, String),
 }
 
 type CoreSend = tokio::sync::mpsc::UnboundedSender<CoreCmd>;
@@ -70,6 +88,8 @@ type CoreRecv = tokio::sync::mpsc::UnboundedReceiver<CoreCmd>;
 
 #[allow(unused_variables, unused_assignments)]
 async fn core_task(
+    friendly_name: String,
+    shoutout: String,
     core: Core,
     core_send: CoreSend,
     mut core_recv: CoreRecv,
@@ -96,12 +116,13 @@ async fn core_task(
 
     use hc_rtc_sig::cli::SigMessage;
 
-    let state = state::State::new();
+    let state = state::State::new(
+        friendly_name,
+        shoutout,
+    );
 
     let mut ice_servers = serde_json::json!([]);
     let mut sig = None;
-    let mut loc_id = None;
-    let mut loc_pk = None;
     let mut con_map = HashMap::new();
 
     while let Some(cmd) = core_recv.recv().await {
@@ -115,6 +136,7 @@ async fn core_task(
                     let is_out = true;
                     let con = con::Con::new(
                         core.clone(),
+                        state.clone(),
                         id.clone(),
                         ice_servers.clone(),
                         is_out,
@@ -122,13 +144,15 @@ async fn core_task(
                     con_map.insert(id, con);
                 }
             }
-            CoreCmd::DropCon(id) => {
+            CoreCmd::DropCon(id, should_block) => {
                 con_map.remove(&id);
+                state.con_done(id, should_block);
             }
             CoreCmd::Addr(addr) => {
-                loc_id = Some(hc_rtc_sig::signal_id_from_addr(&addr).unwrap());
-                loc_pk = Some(hc_rtc_sig::pk_from_addr(&addr).unwrap());
+                let loc_id = hc_rtc_sig::signal_id_from_addr(&addr).unwrap();
+                let loc_pk = hc_rtc_sig::pk_from_addr(&addr).unwrap();
                 tracing::info!(?loc_id, ?loc_pk, "recv local id");
+                state.set_loc(loc_id, loc_pk);
             }
             CoreCmd::ICE(got_ice) => {
                 ice_servers = got_ice;
@@ -143,28 +167,65 @@ async fn core_task(
                     rem_pk,
                     offer,
                 } => {
-                    tracing::error!(?rem_id, ?rem_pk, ?offer, "recv offer");
+                    let id = state::PeerId {
+                        rem_id,
+                        rem_pk,
+                    };
+                    if state.check_want_incoming(id.clone()) {
+                        // this is an "incoming" connection,
+                        // that is, the one that accepts the webrtc "offer",
+                        // then creates the webrtc "answer".
+                        let is_out = false;
+                        let con = con::Con::new(
+                            core.clone(),
+                            state.clone(),
+                            id.clone(),
+                            ice_servers.clone(),
+                            is_out,
+                        );
+                        con.offer(offer);
+                        con_map.insert(id, con);
+                    }
                 }
                 SigMessage::Answer {
                     rem_id,
                     rem_pk,
                     answer,
                 } => {
-                    tracing::error!(?rem_id, ?rem_pk, ?answer, "recv answer");
+                    let id = state::PeerId {
+                        rem_id,
+                        rem_pk,
+                    };
+                    if let Some(con) = con_map.get(&id) {
+                        con.answer(answer);
+                    }
                 }
                 SigMessage::ICE {
                     rem_id,
                     rem_pk,
                     ice,
                 } => {
-                    tracing::error!(?rem_id, ?rem_pk, ?ice, "recv ice");
-                }
-                SigMessage::Demo { rem_id, rem_pk } => {
-                    if &rem_id != loc_id.as_ref().unwrap() && &rem_pk != loc_pk.as_ref().unwrap() {
-                        state.discover(rem_id, rem_pk);
+                    let id = state::PeerId {
+                        rem_id,
+                        rem_pk,
+                    };
+                    if let Some(con) = con_map.get(&id) {
+                        con.ice(ice);
                     }
                 }
-            },
+                SigMessage::Demo { rem_id, rem_pk } => {
+                    state.discover(rem_id, rem_pk);
+                }
+            }
+            CoreCmd::SendOffer(id, offer) => {
+                sig.as_ref().unwrap().send_offer(id, offer);
+            }
+            CoreCmd::SendAnswer(id, answer) => {
+                sig.as_ref().unwrap().send_answer(id, answer);
+            }
+            CoreCmd::SendICE(id, ice) => {
+                sig.as_ref().unwrap().send_ice(id, ice);
+            }
         }
     }
 }
