@@ -96,7 +96,9 @@ async fn core_task(
 ) {
     let tick_abort = tokio::task::spawn(async move {
         loop {
-            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            use rand::Rng;
+            let secs = rand::thread_rng().gen_range(3..8);
+            tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
             if core_send.send(CoreCmd::Tick).is_err() {
                 break;
             }
@@ -124,12 +126,13 @@ async fn core_task(
     let mut ice_servers = serde_json::json!([]);
     let mut sig = None;
     let mut con_map = HashMap::new();
+    let mut loc_pk = hc_rtc_sig::Id::from_slice(&[0; 32]).unwrap();
 
     while let Some(cmd) = core_recv.recv().await {
         match cmd {
             CoreCmd::Shutdown => break,
             CoreCmd::Tick => {
-                tracing::trace!("tick");
+                tracing::trace!(?state, "tick");
                 for id in state.check_want_outgoing() {
                     // this is an "outgoing" connection,
                     // that is, the one that will make the webrtc "offer".
@@ -150,9 +153,9 @@ async fn core_task(
             }
             CoreCmd::Addr(addr) => {
                 let loc_id = hc_rtc_sig::signal_id_from_addr(&addr).unwrap();
-                let loc_pk = hc_rtc_sig::pk_from_addr(&addr).unwrap();
+                loc_pk = hc_rtc_sig::pk_from_addr(&addr).unwrap();
                 tracing::info!(?loc_id, ?loc_pk, "recv local id");
-                state.set_loc(loc_id, loc_pk);
+                state.set_loc(loc_id, loc_pk.clone());
             }
             CoreCmd::ICE(got_ice) => {
                 ice_servers = got_ice;
@@ -167,10 +170,35 @@ async fn core_task(
                     rem_pk,
                     offer,
                 } => {
+                    // *this* node will be polite if our loc_pk < rem_pk,
+                    // (collisions are UB), see:
+                    // https://developer.mozilla.org/en-US/docs/Web/API/WebRTC_API/Perfect_negotiation
+                    let loc_polite = &loc_pk.0 < &rem_pk.0;
+
                     let id = state::PeerId {
                         rem_id,
                         rem_pk,
                     };
+
+                    tracing::trace!(?loc_polite, "recv offer");
+
+                    if con_map.contains_key(&id) {
+                        if loc_polite {
+                            // we are the *polite* node, drop
+                            // our previous offer
+                            let should_block = false;
+                            state.con_done(id.clone(), should_block);
+                            con_map.remove(&id);
+
+                            tracing::trace!(?loc_polite, "drop our offer");
+                        } else {
+                            // we are the *impolite* node, ignore the
+                            // remote offer
+                            tracing::trace!(?loc_polite, "IgnoreOffer");
+                            continue;
+                        }
+                    }
+
                     if state.check_want_incoming(id.clone()) {
                         // this is an "incoming" connection,
                         // that is, the one that accepts the webrtc "offer",

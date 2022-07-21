@@ -40,6 +40,16 @@ pub struct PeerInfo {
 #[derive(Clone)]
 pub struct State(Arc<Mutex<StateInner>>);
 
+impl std::fmt::Debug for State {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let inner = self.0.lock();
+        let map_len = inner.map.len();
+        f.debug_struct("State")
+            .field("map_len", &map_len)
+            .finish()
+    }
+}
+
 impl State {
     pub fn new(
         friendly_name: String,
@@ -110,7 +120,11 @@ impl State {
     pub fn con_done(&self, id: PeerId, should_block: bool) {
         let mut inner = self.0.lock();
 
-        let now = std::time::Instant::now();
+        // randomize slightly
+        use rand::Rng;
+        //let secs = rand::thread_rng().gen_range(0..20);
+        let secs = rand::thread_rng().gen_range(0..5);
+        let now = std::time::Instant::now() + std::time::Duration::from_secs(secs);
 
         let state = if should_block {
             PeerState::Block
@@ -145,24 +159,44 @@ impl State {
             .filter(|(_, i)| i.state == PeerState::Connect)
             .count();
 
-        for (_, i) in inner.map.iter_mut() {
-            if i.state == PeerState::Block && i.last_touch.elapsed().as_secs() > 60 * 5 {
-                i.state = PeerState::New;
-            }
+        let mut remove = Vec::new();
 
-            if i.state == PeerState::Done && i.last_touch.elapsed().as_secs() > 60 {
-                i.state = PeerState::New;
-            }
+        {
+            let now = std::time::Instant::now();
+            let mut items = inner.map.iter_mut().collect::<Vec<_>>();
+            items.sort_unstable_by(|a, b| {
+                let a = now - a.1.last_touch;
+                let b = now - b.1.last_touch;
 
-            if con_count >= MAX_CON {
-                continue;
-            }
+                // handle oldest items first
+                a.cmp(&b).reverse()
+            });
 
-            if i.state == PeerState::New {
-                i.state = PeerState::Connect;
-                out.push(i.id.clone());
-                con_count += 1;
+            for (_, i) in items {
+                if i.state == PeerState::Block && i.last_touch.elapsed().as_secs() > 60 * 5 {
+                    remove.push(i.id.clone());
+                    continue;
+                }
+
+                //if i.state == PeerState::Done && i.last_touch.elapsed().as_secs() > 60 {
+                if i.state == PeerState::Done && i.last_touch.elapsed().as_secs() > 10 {
+                    i.state = PeerState::New;
+                }
+
+                if con_count >= MAX_CON {
+                    continue;
+                }
+
+                if i.state == PeerState::New {
+                    i.state = PeerState::Connect;
+                    out.push(i.id.clone());
+                    con_count += 1;
+                }
             }
+        }
+
+        for remove in remove {
+            inner.map.remove(&remove);
         }
 
         out
@@ -183,7 +217,7 @@ impl State {
             }
         });
 
-        if r.state != PeerState::New {
+        if r.state != PeerState::New && r.state != PeerState::Done {
             return false;
         }
 
@@ -211,6 +245,7 @@ impl State {
     }
 }
 
+#[derive(Debug)]
 struct StateInner {
     loc_id: Arc<Id>,
     loc_pk: Arc<Id>,

@@ -10,6 +10,17 @@ pub fn other_err<E: Into<Box<dyn std::error::Error + Send + Sync>>>(error: E) ->
     std::io::Error::new(std::io::ErrorKind::Other, error)
 }
 
+pub fn debug_spawn<T>(future: T) -> tokio::task::JoinHandle<()>
+where
+    T: std::future::Future<Output = Result<()>> + Send + 'static,
+{
+    tokio::task::spawn(async move {
+        if let Err(err) = future.await {
+            tracing::debug!(?err);
+        }
+    })
+}
+
 mod config;
 
 mod lair;

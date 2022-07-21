@@ -47,7 +47,7 @@ impl Config {
         Ok(Arc::new(Self {
             friendly_name: "Holochain<3".into(),
             shoutout: "Holochain rocks!".into(),
-            signal: vec![url::Url::parse("hc-rtc-sig:z9_7dB5HPV8tK6y8Q86yBtO-99Aa2QFZOZxfy0w0lDo/127.0.0.1:44979/[::1]:46443").unwrap()],
+            signal: vec![url::Url::parse("hc-rtc-sig:z9_7dB5HPV8tK6y8Q86yBtO-99Aa2QFZOZxfy0w0lDo/127.0.0.1:12654/[::1]:12654").unwrap()],
             lair_tag,
             lair_passphrase,
             lair_config: Arc::new(lair_config),
@@ -70,19 +70,34 @@ pub async fn load_config() -> Result<Arc<Config>> {
 }
 
 async fn load_config_inner() -> Result<Arc<Config>> {
-    let mut config_dir = std::path::PathBuf::new();
-    config_dir.push(".");
-    let suffix = std::env::var("HC_RTC_DEMO_CONFIG").unwrap_or_else(|_| "default".to_string());
-    config_dir.push(format!("hc-rtc-demo-config-{}", suffix));
+    let config_dir = (|| {
+        let mut args = std::env::args();
+        args.next().ok_or(())?;
+        let arg = args.next().ok_or(())?;
+        Ok(std::path::PathBuf::from(arg))
+    })().unwrap_or_else(|_: ()| {
+        let mut config_dir = std::path::PathBuf::new();
+        config_dir.push(".");
+        config_dir.push("hc-rtc-demo-config");
+        config_dir
+    });
+
     tokio::fs::create_dir_all(&config_dir).await?;
+
     let mut config_fn = config_dir.clone();
     config_fn.push("config.json");
+
     match read_config(&config_fn).await {
         Ok(r) => Ok(r),
         Err(_) => {
             let _ = tokio::fs::remove_file(&config_fn).await;
             run_init(&config_fn, &config_dir).await?;
-            read_config(&config_fn).await
+            eprintln!("GENERATED {:?}.", &config_fn);
+            eprintln!("Change the config dir path via single cli arg.");
+            eprintln!("Run again with same cli arg to actually run.");
+            eprintln!("Set env var `RUST_LOG` to adjust logging level.");
+            std::process::exit(0);
+            //read_config(&config_fn).await
         }
     }
 }

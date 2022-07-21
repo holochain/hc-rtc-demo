@@ -21,7 +21,7 @@ impl Con {
     ) -> Self {
         let (con_send, con_recv) = tokio::sync::mpsc::unbounded_channel();
 
-        tokio::task::spawn(con_task(core, state, id, ice_servers, is_out, con_send.clone(), con_recv));
+        debug_spawn(con_task(core, state, id, ice_servers, is_out, con_send.clone(), con_recv));
 
         Self {
             con_send,
@@ -165,7 +165,9 @@ async fn con_task(
             ConCmd::ICE(ice) => {
                 let ice = serde_json::to_string(&ice)?;
                 tracing::trace!(%ice, "recv ice");
-                peer_con.add_ice_candidate(&ice).map_err(other_err)?;
+                if let Err(err) = peer_con.add_ice_candidate(&ice) {
+                    tracing::trace!(?err, %ice, "invalid ice (can happen with perfect negotiation)");
+                }
             }
             ConCmd::DataChanOpen => {
                 tracing::trace!("data chan OPEN!");
